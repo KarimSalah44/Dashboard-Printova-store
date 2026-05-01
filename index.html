@@ -349,8 +349,7 @@ tbody tr:hover td{background:#fafbfc;}
 import{initializeApp}from"https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import{getFirestore,collection,getDocs,doc,updateDoc,deleteDoc,addDoc,setDoc,query,orderBy,where,serverTimestamp,Timestamp}
   from"https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import{getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut,updatePassword,EmailAuthProvider,reauthenticateWithCredential}
-  from"https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+// Auth handled locally — no Firebase Auth needed
 
 const firebaseConfig={
   apiKey:"AIzaSyD6X2QqtAFsFLOsw1DCj00ERgR4mIzl4e4",
@@ -361,12 +360,12 @@ const firebaseConfig={
   appId:"1:44413773021:web:12d3877feb027f1a122734"
 };
 
-// ===== ADMIN EMAIL — غيّر من هنا فقط =====
-const ADMIN_EMAIL = "karimsalah1@gmail.com";
+// ===== بيانات الأدمن — غيّر من هنا فقط =====
+const ADMIN_EMAIL    = "Printova22@gmail.com";
+const ADMIN_PASSWORD = "Hebaheba";
 
 const app=initializeApp(firebaseConfig);
 const db=getFirestore(app);
-const auth=getAuth(app);
 
 let orders=[];
 let products=[];
@@ -374,44 +373,57 @@ let expenses=[];
 let currentPage='dashboard';
 let editingProductId=null;
 let viewingOrder=null;
-let financePeriod='today';
-let currentUser=null;
+window.financePeriod='today';
 
-// ===== AUTH =====
-onAuthStateChanged(auth,async user=>{
-  currentUser=user;
-  if(user&&user.email===ADMIN_EMAIL){
+// ===== AUTH (Local) =====
+let currentUser = null;
+
+function checkSession(){
+  const saved = sessionStorage.getItem('printova_admin');
+  if(saved === 'ok'){
+    currentUser = {email: ADMIN_EMAIL};
     document.getElementById('loginScreen').style.display='none';
     document.getElementById('adminApp').style.display='block';
-    document.getElementById('sbUserEmail').textContent=user.email;
-    await Promise.all([loadOrders(),loadProducts(),loadExpenses()]);
-    goTo('dashboard');
-  } else if(user){
-    await signOut(auth);
-    showLoginErr('ليس لديك صلاحية الوصول');
+    document.getElementById('sbUserEmail').textContent=ADMIN_EMAIL;
+    Promise.all([loadOrders(),loadProducts(),loadExpenses()]).then(()=>goTo('dashboard'));
   } else {
     document.getElementById('loginScreen').style.display='flex';
     document.getElementById('adminApp').style.display='none';
   }
-});
+}
+checkSession();
 
 window.doAdminLogin=async function(){
   const email=document.getElementById('adminLoginEmail').value.trim();
   const pass=document.getElementById('adminLoginPass').value;
   const err=document.getElementById('loginErrMsg');
   err.style.display='none';
-  err.style.display='none';
   const btn=document.getElementById('loginSubmitBtn');
   btn.disabled=true;btn.textContent='جاري الدخول...';
-  try{await signInWithEmailAndPassword(auth,email,pass);}
-  catch(e){
+
+  if(email===ADMIN_EMAIL && pass===ADMIN_PASSWORD){
+    sessionStorage.setItem('printova_admin','ok');
+    currentUser={email:ADMIN_EMAIL};
+    document.getElementById('sbUserEmail').textContent=ADMIN_EMAIL;
+    document.getElementById('loginScreen').style.display='none';
+    document.getElementById('adminApp').style.display='block';
+    await Promise.all([loadOrders(),loadProducts(),loadExpenses()]);
+    goTo('dashboard');
+  } else {
     showLoginErr('بريد أو كلمة مرور خاطئة');
     btn.disabled=false;btn.textContent='دخول';
   }
 };
 function showLoginErr(msg){const el=document.getElementById('loginErrMsg');el.textContent=msg;el.style.display='block';}
-window.doLogout=async function(){
-  if(confirm('تسجيل الخروج؟'))await signOut(auth);
+window.doLogout=function(){
+  if(confirm('تسجيل الخروج؟')){
+    sessionStorage.removeItem('printova_admin');
+    currentUser=null;
+    document.getElementById('loginScreen').style.display='flex';
+    document.getElementById('adminApp').style.display='none';
+    document.getElementById('adminLoginEmail').value='';
+    document.getElementById('adminLoginPass').value='';
+  }
 };
 
 // ===== LOAD DATA =====
@@ -449,11 +461,12 @@ window.goTo=function(page){
   document.querySelector(`[data-goto="${page}"]`)?.classList.add('active');
   const titles={dashboard:'لوحة التحكم',orders:'الطلبات',products:'المنتجات',customers:'العملاء',finance:'المصاريف والمالية',settings:'الإعدادات'};
   document.getElementById('mainTitle').textContent=titles[page]||page;
-  renderPage(page);
+  window.renderPage(page);
   closeSidebar();
 };
 
-function renderPage(page){
+window.renderPage=function(page){
+  const activeId=document.activeElement?.id;
   const el=document.getElementById('contentArea');
   if(page==='dashboard')el.innerHTML=getDashboardHTML();
   else if(page==='orders')el.innerHTML=getOrdersHTML(orders);
@@ -462,6 +475,10 @@ function renderPage(page){
   else if(page==='finance')el.innerHTML=getFinanceHTML();
   else el.innerHTML=getSettingsHTML();
   lucide.createIcons();
+  if(activeId){
+    const restored=document.getElementById(activeId);
+    if(restored){restored.focus();const len=restored.value?.length||0;restored.setSelectionRange(len,len);}
+  }
 }
 
 // ===== DASHBOARD =====
@@ -501,47 +518,49 @@ function getDashboardHTML(){
 }
 
 // ===== ORDERS =====
-let orderSearch = '';
-let orderStatusFilter = 'all';
+window.orderSearch = '';
+window.orderStatusFilter = 'all';
 
 function getOrdersHTML(list){
-  const searchTerm = orderSearch.trim().toLowerCase();
-  let filtered = list;
+  const searchTerm = window.orderSearch.trim().toLowerCase();
+  
+  const allSorted = [...orders].reverse();
 
-  // فلتر الحالة
-  if(orderStatusFilter !== 'all'){
-    filtered = filtered.filter(o=>o.status===orderStatusFilter);
+  let filtered = list.map(o => {
+    const realIdx = allSorted.findIndex(x => x.id === o.id);
+    const seq = realIdx >= 0 ? String(realIdx + 1).padStart(3, '0') : '???';
+    return { ...o, _seq: seq };
+  });
+
+  if(window.orderStatusFilter !== 'all'){
+    filtered = filtered.filter(o=>o.status===window.orderStatusFilter);
   }
 
-  // فلتر البحث — بالاسم أو الهاتف أو الكود التسلسلي (001, 002...)
   if(searchTerm){
-    filtered = filtered.filter((o,i) => {
-      const seqNum = String(i+1).padStart(3,'0');
-      return (
-        (o.customerName||'').toLowerCase().includes(searchTerm) ||
-        (o.phone||'').toLowerCase().includes(searchTerm) ||
-        seqNum.includes(searchTerm)
-      );
-    });
+    filtered = filtered.filter(o => (
+      (o.customerName||'').toLowerCase().includes(searchTerm) ||
+      (o.phone||'').toLowerCase().includes(searchTerm) ||
+      o._seq.includes(searchTerm)
+    ));
   }
 
   return `
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
     <div class="search-input-wrap">
       <input type="text" id="orderSearchInput" placeholder="🔍 ابحث باسم العميل أو الهاتف أو الرقم (001)..." 
-        value="${orderSearch}" 
-        oninput="orderSearch=this.value;renderPage('orders');">
+        value="${window.orderSearch}" 
+        oninput="window.orderSearch=this.value;window.renderPage('orders');">
     </div>
     <button class="btn-sm btn-green" onclick="exportOrdersExcel()">
       <i data-lucide="download" style="width:13px;height:13px"></i> تصدير Excel
     </button>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
-    <button class="btn-sm ${orderStatusFilter==='all'?'btn-add':'btn-view'}" onclick="setOrderFilter('all')">الكل (${orders.length})</button>
-    <button class="btn-sm" style="${orderStatusFilter==='pending'?'background:var(--orange);color:#fff':'background:#fff7ed;color:#c2410c'}" onclick="setOrderFilter('pending')">⏳ معلق (${orders.filter(o=>o.status==='pending').length})</button>
-    <button class="btn-sm" style="${orderStatusFilter==='processing'?'background:var(--info);color:#fff':'background:#eff6ff;color:#1d4ed8'}" onclick="setOrderFilter('processing')">🔄 جاري (${orders.filter(o=>o.status==='processing').length})</button>
-    <button class="btn-sm" style="${orderStatusFilter==='done'?'background:var(--success);color:#fff':'background:#f0fdf4;color:#15803d'}" onclick="setOrderFilter('done')">✅ مكتمل (${orders.filter(o=>o.status==='done').length})</button>
-    <button class="btn-sm" style="${orderStatusFilter==='cancelled'?'background:var(--danger);color:#fff':'background:#fef2f2;color:#b91c1c'}" onclick="setOrderFilter('cancelled')">❌ ملغي (${orders.filter(o=>o.status==='cancelled').length})</button>
+    <button class="btn-sm ${window.orderStatusFilter==='all'?'btn-add':'btn-view'}" onclick="setOrderFilter('all')">الكل (${orders.length})</button>
+    <button class="btn-sm" style="${window.orderStatusFilter==='pending'?'background:var(--orange);color:#fff':'background:#fff7ed;color:#c2410c'}" onclick="setOrderFilter('pending')">⏳ معلق (${orders.filter(o=>o.status==='pending').length})</button>
+    <button class="btn-sm" style="${window.orderStatusFilter==='processing'?'background:var(--info);color:#fff':'background:#eff6ff;color:#1d4ed8'}" onclick="setOrderFilter('processing')">🔄 جاري (${orders.filter(o=>o.status==='processing').length})</button>
+    <button class="btn-sm" style="${window.orderStatusFilter==='done'?'background:var(--success);color:#fff':'background:#f0fdf4;color:#15803d'}" onclick="setOrderFilter('done')">✅ مكتمل (${orders.filter(o=>o.status==='done').length})</button>
+    <button class="btn-sm" style="${window.orderStatusFilter==='cancelled'?'background:var(--danger);color:#fff':'background:#fef2f2;color:#b91c1c'}" onclick="setOrderFilter('cancelled')">❌ ملغي (${orders.filter(o=>o.status==='cancelled').length})</button>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
     <span style="font-size:13px;color:var(--gray);font-weight:700">تصدير حسب الفترة:</span>
@@ -555,22 +574,21 @@ function getOrdersHTML(list){
 }
 
 window.setOrderFilter = function(status){
-  orderStatusFilter = status;
-  renderPage('orders');
+  window.orderStatusFilter = status;
+  window.renderPage('orders');
 };
 
 function getOrdersTableHTML(list){
-  // الترقيم يعتمد على الأحدث أولاً — الطلب الأقدم = 001
-  // نرتبهم تصاعدياً للترقيم، ونعرضهم تنازلياً (list جاية من orders المرتبة desc)
-  const allSorted = [...orders].reverse(); // الأقدم أول للترقيم
+  const allSorted = [...orders].reverse();
   
   if(!list.length)return`<div class="empty-state"><i data-lucide="inbox" style="width:40px;height:40px"></i><p>لا توجد طلبات</p></div>`;
   return`<table>
     <thead><tr><th>الرقم</th><th>العميل</th><th>الهاتف</th><th>الإجمالي</th><th>الحالة</th><th>التاريخ</th><th>إجراءات</th></tr></thead>
     <tbody>${list.map(o=>{
-      // الرقم التسلسلي الحقيقي من قائمة كل الطلبات مرتبة تصاعدياً
-      const realIdx = allSorted.findIndex(x=>x.id===o.id);
-      const seq = realIdx>=0 ? String(realIdx+1).padStart(3,'0') : '???';
+      const seq = o._seq || (()=>{
+        const realIdx = allSorted.findIndex(x=>x.id===o.id);
+        return realIdx>=0 ? String(realIdx+1).padStart(3,'0') : '???';
+      })();
       return`<tr>
       <td><b style="color:var(--orange)">#${seq}</b></td>
       <td><b>${o.customerName||'—'}</b></td>
@@ -685,19 +703,18 @@ const CATEGORIES={
   'خامات الطباعة':['خامات سبلميشن','شيتات سبلميشن'],
   'إلكترونيات':['إلكترونيات'],
 };
-let productSearch='';
+window.productSearch='';
 
 function getProductsHTML(){
-  const searchTerm=productSearch.trim().toLowerCase();
-  // البحث باسم المنتج فقط
+  const searchTerm=window.productSearch.trim().toLowerCase();
   const filtered=searchTerm===''?products:products.filter(p=>(p.name||'').toLowerCase().includes(searchTerm));
 
   return `
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap">
     <div class="search-input-wrap">
       <input type="text" id="productSearchInput" placeholder="🔍 ابحث باسم المنتج..." 
-        value="${productSearch}" 
-        oninput="productSearch=this.value;renderPage('products');">
+        value="${window.productSearch}" 
+        oninput="window.productSearch=this.value;window.renderPage('products');">
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn-sm btn-green" onclick="exportProductsExcel()">
@@ -805,7 +822,7 @@ window.saveProduct=async function(){
       products.push({id:ref.id,...data});
       showToast('✅ تم إضافة المنتج');
     }
-    closeModal('productFormModal');renderPage('products');
+    closeModal('productFormModal');window.renderPage('products');
   }catch(e){showToast('❌ '+e.message);}
   finally{btn.disabled=false;btn.textContent='💾 حفظ';}
 };
@@ -815,7 +832,7 @@ window.deleteProduct=async function(id){
   try{
     await deleteDoc(doc(db,'products',id));
     products=products.filter(p=>p.id!==id);
-    renderPage('products');showToast('🗑 تم الحذف');
+    window.renderPage('products');showToast('🗑 تم الحذف');
   }catch(e){showToast('❌ '+e.message);}
 };
 
@@ -863,7 +880,7 @@ window.importProductsExcel=function(input){
         products.push({id:ref.id,...d});
         imported++;
       }
-      renderPage('products');
+      window.renderPage('products');
       showToast(`✅ تم استيراد ${imported} منتج`);
       input.value='';
     }catch(err){showToast('❌ خطأ في الاستيراد: '+err.message);}
@@ -872,7 +889,7 @@ window.importProductsExcel=function(input){
 };
 
 // ===== CUSTOMERS =====
-let customerSearch='';
+window.customerSearch='';
 function getCustomersHTML(){
   const map={};
   orders.forEach(o=>{
@@ -881,7 +898,7 @@ function getCustomersHTML(){
     map[key].count++;map[key].total+=(o.total||0);
   });
   const list=Object.values(map);
-  const searchTerm=customerSearch.trim().toLowerCase();
+  const searchTerm=window.customerSearch.trim().toLowerCase();
   // البحث بالاسم أو البريد أو الهاتف
   const filtered=searchTerm===''?list:list.filter(c=>
     (c.name||'').toLowerCase().includes(searchTerm)||
@@ -893,8 +910,8 @@ function getCustomersHTML(){
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:8px;flex-wrap:wrap">
       <div class="search-input-wrap" style="max-width:340px">
         <input type="text" placeholder="🔍 ابحث بالاسم أو البريد أو الهاتف..." 
-          value="${customerSearch}" 
-          oninput="customerSearch=this.value;renderPage('customers');">
+          value="${window.customerSearch}" 
+          oninput="window.customerSearch=this.value;window.renderPage('customers');">
       </div>
       <div style="display:flex;gap:8px">
         <span style="font-size:13px;color:var(--gray);align-self:center">${filtered.length} عميل</span>
@@ -943,6 +960,7 @@ let expenseTypeFilter='all';
 
 function getFinanceHTML(){
   const now=new Date();
+  const financePeriod=window.financePeriod;
   
   function filterByPeriod(list,period){
     return list.filter(item=>{
@@ -1077,7 +1095,7 @@ function getFinanceHTML(){
   </div>`;
 }
 
-window.setFinancePeriod=function(p){financePeriod=p;renderPage('finance');};
+window.setFinancePeriod=function(p){window.financePeriod=p;window.renderPage('finance');};
 
 window.addExpense=async function(){
   const type=document.getElementById('expType').value;
@@ -1090,7 +1108,7 @@ window.addExpense=async function(){
     expenses.unshift({id:ref.id,...d});
     document.getElementById('expAmount').value='';
     document.getElementById('expNote').value='';
-    renderPage('finance');
+    window.renderPage('finance');
     showToast('✅ تم إضافة المصروف');
   }catch(e){showToast('❌ '+e.message);}
 };
@@ -1100,7 +1118,7 @@ window.deleteExpense=async function(id){
   try{
     await deleteDoc(doc(db,'expenses',id));
     expenses=expenses.filter(e=>e.id!==id);
-    renderPage('finance');
+    window.renderPage('finance');
     showToast('🗑 تم حذف المصروف');
   }catch(e){showToast('❌ '+e.message);}
 };
@@ -1169,26 +1187,14 @@ window.changePassword=async function(){
   errEl.style.display='none';
 
   if(!currentPass||!newPass||!confirmPass){errEl.textContent='أكمل جميع الحقول';errEl.style.display='block';return;}
+  if(currentPass!==ADMIN_PASSWORD){errEl.textContent='كلمة المرور الحالية خاطئة';errEl.style.display='block';return;}
   if(newPass!==confirmPass){errEl.textContent='كلمة المرور الجديدة غير متطابقة';errEl.style.display='block';return;}
   if(newPass.length<6){errEl.textContent='كلمة المرور يجب أن تكون 6 أحرف على الأقل';errEl.style.display='block';return;}
 
-  const btn=document.getElementById('changePassBtn');
-  btn.disabled=true;btn.textContent='جاري التغيير...';
-  try{
-    const credential=EmailAuthProvider.credential(currentUser.email,currentPass);
-    await reauthenticateWithCredential(currentUser,credential);
-    await updatePassword(currentUser,newPass);
-    document.getElementById('currentPass').value='';
-    document.getElementById('newPass').value='';
-    document.getElementById('confirmPass').value='';
-    showToast('✅ تم تغيير كلمة المرور بنجاح');
-  }catch(e){
-    if(e.code==='auth/wrong-password')errEl.textContent='كلمة المرور الحالية خاطئة';
-    else errEl.textContent='خطأ: '+e.message;
-    errEl.style.display='block';
-  }finally{
-    btn.disabled=false;btn.textContent='🔒 تغيير كلمة المرور';
-  }
+  showToast('✅ تم تغيير كلمة المرور — يرجى تحديث الكود يدوياً لحفظها');
+  document.getElementById('currentPass').value='';
+  document.getElementById('newPass').value='';
+  document.getElementById('confirmPass').value='';
 };
 
 function getSettingsHTML(){
@@ -1204,7 +1210,7 @@ function getSettingsHTML(){
         <div class="form-group">
           <label>البريد الإلكتروني للأدمن</label>
           <input type="email" value="${ADMIN_EMAIL}" readonly style="background:#f8fafb;color:var(--gray)">
-          <small style="color:var(--gray);font-size:11px;margin-top:4px;display:block">* لتغيير البريد تواصل مع المطور</small>
+          <small style="color:var(--gray);font-size:11px;margin-top:4px;display:block">* لتغيير البريد أو كلمة المرور عدّل ADMIN_EMAIL وADMIN_PASSWORD في الكود</small>
         </div>
         <button class="btn-full" id="saveSettingsBtn" onclick="saveSettings()">💾 حفظ الإعدادات</button>
       </div>
@@ -1233,7 +1239,7 @@ window.closeModal=function(id){document.getElementById(id).classList.remove('ope
 window.refreshData=async function(){
   const btn=document.querySelector('.btn-refresh');if(btn){btn.disabled=true;btn.textContent='جاري التحديث...';}
   await Promise.all([loadOrders(),loadProducts(),loadExpenses()]);
-  renderPage(currentPage);
+  window.renderPage(currentPage);
   if(btn){btn.disabled=false;btn.textContent='تحديث';}
   showToast('🔄 تم تحديث البيانات');
 };
